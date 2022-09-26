@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+
+echo "Geoserver"
+exit 0

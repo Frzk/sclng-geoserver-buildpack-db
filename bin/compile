@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+
+build_dir="${1}"
+cache_dir="${2}"
+env_dir="${3}"
+
+geoserver_version="2.21.1"
+geoserver_url="https://sourceforge.net/projects/geoserver/files/GeoServer/%s/geoserver-%s-war.zip"
+
+geoserver_jdbcstore_plugin_version="2.22"
+geoserver_jdbcstore_plugin_url="https://build.geoserver.org/geoserver/main/community-latest/geoserver-%s-SNAPSHOT-jdbcstore-plugin.zip"
+
+
+# Download Geoserver and the JDBCStore plugin:
+printf -v g_url "${geoserver_url}" "${geoserver_version}" "${geoserver_version}"
+printf -v g_jdbcstore_url "${geoserver_jdbcstore_plugin_url}" "${geoserver_jdbcstore_plugin_version}"
+
+curl --silent \
+    --location "${g_url}" \
+    --output "${cache_dir}/geoserver-${geoserver_version}.zip"
+
+curl --silent \
+    --location "${g_jdbcstore_url}" \
+    --output "${cache_dir}/geoserver-jdbcstore-${geoserver_jdbcstore_plugin_version}.zip"
+
+# Unzip everything:
+mkdir -p "${cache_dir}/geoserver-${geoserver_version}/geoserver"
+mkdir -p "${cache_dir}/geoserver-${geoserver_version}/jdbcstore"
+
+unzip -qq -o "${cache_dir}/geoserver-${geoserver_version}.zip" \
+    -d "${cache_dir}/geoserver-${geoserver_version}"
+unzip -qq -o "${cache_dir}/geoserver-${geoserver_version}/geoserver.war" \
+    -d "${cache_dir}/geoserver-${geoserver_version}/geoserver"
+
+unzip -qq -o "${cache_dir}/geoserver-jdbcstore-${geoserver_jdbcstore_plugin_version}.zip" \
+    -d "${cache_dir}/geoserver-${geoserver_version}/jdbcstore"
+
+# Move plugin:
+find "${cache_dir}/geoserver-${geoserver_version}/jdbcstore/" \
+    -name "*.jar" \
+    -exec mv '{}' "${cache_dir}/geoserver-${geoserver_version}/geoserver/WEB-INF/lib/" \;
+
+# Zip everything into a .war:
+pushd "${cache_dir}/geoserver-${geoserver_version}/geoserver" \
+    && zip -qq -r "${build_dir}/geoserver-${geoserver_version}.war" . \
+    && popd
+
+# Cleanup:
+rm -Rf "${cache_dir}/geoserver-${geoserver_version}"
+
