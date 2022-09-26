@@ -49,6 +49,10 @@ pushd "${cache_dir}/geoserver-${geoserver_version}/geoserver" \
     && zip -qq -r "${build_dir}/geoserver-${geoserver_version}.war" . \
     && popd
 
+pushd "${build_dir}" \
+    && ln -sfn "geoserver-${geoserver_version}.war" "geoserver.war" \
+    && popd
+
 # Cleanup:
 echo "Cleaning up"
 rm -Rf "${cache_dir}/geoserver-${geoserver_version}"
