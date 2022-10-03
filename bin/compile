@@ -6,54 +6,133 @@ env_dir="${3}"
 
 geoserver_version="2.21.1"
 geoserver_url="https://sourceforge.net/projects/geoserver/files/GeoServer/%s/geoserver-%s-war.zip"
+geoserver_sha256="03333c917ff3c0ccd585af5ecc4389edcf8b039e9678d1e48496e909afc613e4"
 
 geoserver_jdbcstore_plugin_version="2.22"
 geoserver_jdbcstore_plugin_url="https://build.geoserver.org/geoserver/main/community-latest/geoserver-%s-SNAPSHOT-jdbcstore-plugin.zip"
+geoserver_jdbcstore_plugin_sha256="0af3fc7e47cbed9f4479ef5560a31223661df1ea4d0503accb98abb30be14e80"
 
 
-# Download Geoserver and the JDBCStore plugin:
+printf -v geoserver_zip "%s/geoserver-%s.zip" "${cache_dir}" "${geoserver_version}"
+printf -v geoserver_jdbcstore_plugin_zip "%s/geoserver-jdbcstore-%s.zip" "${cache_dir}" "${geoserver_jdbcstore_plugin_version}"
+
+printf -v g_extract_path "%s/geoserver-%s/geoserver" "${cache_dir}" "${geoserver_version}"
+printf -v g_jdbcstore_plugin_extract_path "%s/geoserver-%s/jdbcstore" "${cache_dir}" "${geoserver_version}"
+
+printf -v final "%s/geoserver-%s.war" "${cache_dir}" "${geoserver_version}"
+
 printf -v g_url "${geoserver_url}" "${geoserver_version}" "${geoserver_version}"
 printf -v g_jdbcstore_url "${geoserver_jdbcstore_plugin_url}" "${geoserver_jdbcstore_plugin_version}"
 
-echo "Downloading Geoserver ${geoserver_version}"
-curl --silent \
-    --location "${g_url}" \
-    --output "${cache_dir}/geoserver-${geoserver_version}.zip"
 
-echo "Downloading Geoserver JDBCStore plugin ${geoserver_jdbcstore_plugin_version}"
-curl --silent \
-    --location "${g_jdbcstore_url}" \
-    --output "${cache_dir}/geoserver-jdbcstore-${geoserver_jdbcstore_plugin_version}.zip"
+verify_checksum() {
+    local return_code
+    local file
+    local sum
 
-# Unzip everything:
-echo "Importing plugin"
-mkdir -p "${cache_dir}/geoserver-${geoserver_version}/geoserver"
-mkdir -p "${cache_dir}/geoserver-${geoserver_version}/jdbcstore"
+    return_code=1
+    file="${1}"
+    sum="${2}"
 
-unzip -qq -o "${cache_dir}/geoserver-${geoserver_version}.zip" \
-    -d "${cache_dir}/geoserver-${geoserver_version}"
-unzip -qq -o "${cache_dir}/geoserver-${geoserver_version}/geoserver.war" \
-    -d "${cache_dir}/geoserver-${geoserver_version}/geoserver"
+    if [ -f "${file}" ]
+    then
+        echo "${sum} ${file}" \
+            | sha256sum --check --status
+        return_code=${?}
+    fi
 
-unzip -qq -o "${cache_dir}/geoserver-jdbcstore-${geoserver_jdbcstore_plugin_version}.zip" \
-    -d "${cache_dir}/geoserver-${geoserver_version}/jdbcstore"
+    return ${return_code}
+}
 
-# Move plugin:
-find "${cache_dir}/geoserver-${geoserver_version}/jdbcstore/" \
-    -name "*.jar" \
-    -exec mv '{}' "${cache_dir}/geoserver-${geoserver_version}/geoserver/WEB-INF/lib/" \;
+# Tries to download file to output.
+# Retries until checksum is OK or number of retries have reach a limit.
+download_with_retries() {
+    local return_code
+    local from
+    local to
+    local tries
+    local limit
 
-# Zip everything into a .war:
-echo "Building Geoserver Web Archive"
-pushd "${cache_dir}/geoserver-${geoserver_version}/geoserver" \
-    && zip -qq -r "${build_dir}/geoserver-${geoserver_version}.war" . \
-    && popd
+    return_code=1
+    tries=1
+    from="${1}"
+    to="${2}"
+    checksum="${3}"
+    limit=${4}
 
-pushd "${build_dir}" \
-    && ln -sfn "geoserver-${geoserver_version}.war" "geoserver.war" \
-    && popd
+    until [ ${tries} -gt ${limit} ] || verify_checksum "${to}" "${checksum}"
+    do
+        rm -f "${to}"
 
-# Cleanup:
-echo "Cleaning up"
-rm -Rf "${cache_dir}/geoserver-${geoserver_version}"
+        curl --silent --location "${from}" --output "${to}"
 
+        ((tries++))
+    done
+
+    if [ ${tries} -le ${limit} ]
+    then
+        return_code=0
+    fi
+
+    return ${return_code}
+}
+
+
+echo "Retrieving GeoServer ${geoserver_version}"
+download_with_retries \
+    "${g_url}" \
+    "${geoserver_zip}" \
+    "${geoserver_sha256}" \
+    3
+geoserver_ok=${?}
+
+echo "Retrieving GeoServer JDBCStore plugin ${geoserver_jdbcstore_plugin_version}"
+download_with_retries \
+    "${g_jdbcstore_url}" \
+    "${geoserver_jdbcstore_plugin_zip}" \
+    "${geoserver_jdbcstore_plugin_sha256}" \
+    3
+jdbcstore_ok=${?}
+
+
+if [ ${geoserver_ok} -eq 0 ] && [ ${jdbcstore_ok} -eq 0 ]
+then
+    # Unzip everything:
+    echo "Importing plugin"
+    mkdir -p "${g_extract_path}"
+    mkdir -p "${g_jdbcstore_plugin_extract_path}"
+
+    unzip -qq -o "${geoserver_zip}" \
+        -d "${cache_dir}/geoserver-${geoserver_version}"
+
+    unzip -qq -o "${cache_dir}/geoserver-${geoserver_version}/geoserver.war" \
+        -d "${g_extract_path}"
+
+    unzip -qq -o "${geoserver_jdbcstore_plugin_zip}" \
+        -d "${g_jdbcstore_plugin_extract_path}"
+
+    # Move plugin:
+    find "${g_jdbcstore_plugin_extract_path}" \
+        -name "*.jar" \
+        -exec mv '{}' "${g_extract_path}/WEB-INF/lib/" \;
+
+    # Zip everything into a .war:
+    echo "Building Geoserver Web Archive"
+    pushd "${g_extract_path}" > /dev/null \
+        && zip -qq -r "${build_dir}/geoserver-${geoserver_version}.war" . \
+        && popd > /dev/null
+
+    # Link versioned file:
+    pushd "${build_dir}" > /dev/null \
+        && ln -sfn "geoserver-${geoserver_version}.war" "geoserver.war" \
+        && popd > /dev/null
+
+    # Cleanup:
+    echo "Cleaning up"
+    rm -Rf "${cache_dir}/geoserver-${geoserver_version}"
+else
+    echo "Unable to retrieve required GeoServer files. Aborting."
+    exit 1
+fi
+
+exit 0
